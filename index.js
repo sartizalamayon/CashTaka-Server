@@ -82,6 +82,14 @@ async function run() {
       }
     })
 
+    app.get('/user/balance/:number', async(req, res) =>{
+      const number = req.params.number
+      const user = await UsersCollection.findOne({number:number})
+      if(user){
+        res.send({balance: user.balance})
+      }
+    })
+
 
   } catch (error) {
     console.error("Failed to connect to MongoDB:", error);
