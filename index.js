@@ -71,6 +71,17 @@ async function run() {
       }
     })
 
+    app.patch('/user/lastlogin/:number', async(req, res)=>{
+      const number = req.params.number
+      const response = await UsersCollection.updateOne({number:number}, {$set:{lastLogin: new Date().toISOString()}})
+      if(response.acknowledged){
+        res.send({success: true, message: "Last login updated successfully"})
+      }
+      else{
+        res.send({success: false, message: "Database Error: Failed to update last login"})
+      }
+    })
+
 
   } catch (error) {
     console.error("Failed to connect to MongoDB:", error);
