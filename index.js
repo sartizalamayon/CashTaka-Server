@@ -25,6 +25,26 @@ const client = new MongoClient(uri, {
   },
 });
 
+
+const verifyToken = (req, res, next) => {
+  if (!req.headers.authorization) {
+      return res.status(401).send('Access Denied');
+  }
+  const token = req.headers.authorization.split(' ')[1];
+  if (!token) {
+      return res.status(401).send('Access Denied');
+  }
+  
+  jwt.verify(token, process.env.JWT_Secret, (err, decoded) => {
+      if (err) {
+          return res.status(401).send('Access Denied');
+      }
+
+  req.decoded = decoded;
+  next();
+  });
+};
+
 async function run() {
   try {
     await client.connect();
@@ -32,6 +52,9 @@ async function run() {
     // Models
     const database = client.db("CashTaka");
     const UsersCollection = database.collection("users"); 
+    const Transaction = database.collection("transaction");
+    const CashInRequests = database.collection("cashInRequests")
+    const CashOutRequests = database.collection("cashOutRequests")
 
     app.post('/users', async (req, res)=>{
       const user = req.body
@@ -87,6 +110,70 @@ async function run() {
       const user = await UsersCollection.findOne({number:number})
       if(user){
         res.send({balance: user.balance})
+      }
+    })
+
+    app.get('/user/role/:info', async(req, res)=>{
+      console.log('hit')
+      const info = req.params.info
+      const user = await UsersCollection.findOne({'$or':[{email:info} , {number:info}]})
+      if(user){
+        res.status(200).send({role:user.role})
+      }else{
+        res.status(404).send("Not Found")
+      }
+    })
+
+    app.get('/user', verifyToken, async (req, res) => {
+      const info = req.decoded.user;
+      const user = await UsersCollection.findOne({'$or':[{email:info} , {number:info}]})
+      if (user) {
+        res.send({ success: true, user });
+      } else {
+        res.send({ success: false, message: 'User not found' });
+      }
+    });
+
+    app.post('/send-money', verifyToken, async (req, res) => {
+      const transaction = req.body
+      transaction.type = "Send Money"
+      const sender = await UsersCollection.findOne({'$or':[{email:transaction.sender} , {number:transaction.sender}]})
+      const receiver = await UsersCollection.findOne({'$or':[{email:transaction.receiver} , {number:transaction.receiver}]})
+      
+      if(sender && receiver){
+        const validPin = await bcrypt.compare(transaction.pin, sender.pin);
+        if(!validPin){
+          return res.status(404).json({ success: false, message: 'Invalid pin' });
+        }
+        else{
+            const cut = transaction.amount < 100? transaction.amount : transaction.amount+5
+            const response = await UsersCollection.updateOne({number:sender.number}, {$inc:{balance: -cut}})
+            if(response.acknowledged){
+              const response = await UsersCollection.updateOne({number:receiver.number}, {$inc:{balance: transaction.amount}})
+              if(response.acknowledged){
+                const response = await Transaction.insertOne(transaction)
+                if(response.acknowledged){
+                  res.status(200).send({success: true, message: "Transaction successful"})
+                }
+                else{
+                  const rollback = await UsersCollection.updateOne({number:sender.number}, {
+                    $inc:{balance: cut}
+                  })
+                  res.status(404).send({success: false, message: "Database Error: Failed to update receiver balance"})
+                }
+              }
+              else{
+                const rollback = await UsersCollection.updateOne({number:sender.number}, {
+                  $inc:{balance: cut}
+                })
+                res.status(404).send({success: false, message: "Database Error: Failed to update receiver balance"})
+              }
+            }else{
+              res.status(404).send({success: false, message: "Database Error: Failed to update sender balance"})
+            }
+        }
+      }else{
+        res.status(404).send({success: false, message: "Sender or Receiver"})
       }
     })
 
