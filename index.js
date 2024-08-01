@@ -3,7 +3,7 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require('jsonwebtoken')
 require("dotenv").config();
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 3001;
 
@@ -54,7 +54,6 @@ async function run() {
     const UsersCollection = database.collection("users"); 
     const Transaction = database.collection("transaction");
     const CashInRequests = database.collection("cashInRequests")
-    const CashOutRequests = database.collection("cashOutRequests")
 
     app.post('/users', async (req, res)=>{
       const user = req.body
@@ -114,7 +113,6 @@ async function run() {
     })
 
     app.get('/user/role/:info', async(req, res)=>{
-      console.log('hit')
       const info = req.params.info
       const user = await UsersCollection.findOne({'$or':[{email:info} , {number:info}]})
       if(user){
@@ -151,6 +149,7 @@ async function run() {
             if(response.acknowledged){
               const response = await UsersCollection.updateOne({number:receiver.number}, {$inc:{balance: transaction.amount}})
               if(response.acknowledged){
+                delete transaction.pin;
                 const response = await Transaction.insertOne(transaction)
                 if(response.acknowledged){
                   res.status(200).send({success: true, message: "Transaction successful"})
@@ -176,6 +175,142 @@ async function run() {
         res.status(404).send({success: false, message: "Sender or Receiver"})
       }
     })
+
+    app.post('/cash-out', verifyToken, async (req, res) => {
+      const transaction = req.body;
+      transaction.type = "Cash Out";
+      const sender = await UsersCollection.findOne({'$or':[{email:transaction.sender}, {number:transaction.sender}]});
+      const agent = await UsersCollection.findOne({'$or':[{email:transaction.receiver}, {number:transaction.receiver}]});
+      
+      if (sender && agent) {
+        const validPin = await bcrypt.compare(transaction.pin, sender.pin);
+        if (!validPin) {
+          return res.status(404).json({ success: false, message: 'Invalid pin' });
+        } else {
+          const response = await UsersCollection.updateOne({number:sender.number}, {$inc:{balance:-transaction.amount}});
+          if (response.acknowledged) {
+            const response = await UsersCollection.updateOne({number:agent.number}, {$inc:{balance:transaction.amount}});
+            if (response.acknowledged) {
+              delete transaction.pin;
+              const response = await Transaction.insertOne(transaction);
+              if (response.acknowledged) {
+                res.status(200).send({ success: true, message: 'Transaction successful' });
+              } else {
+                const rollback = await UsersCollection.updateOne({number:sender.number}, {
+                  $inc: { balance: transaction.amount }});
+                const rollback2 = await UsersCollection.updateOne({number:agent.number}, {
+                  $inc: { balance: -transaction.amount }})
+                res.status(404).send({ success: false, message: 'Database Error: Failed to update receiver balance' });
+              }
+            } else {
+              const rollback = await UsersCollection.updateOne({number:sender.number}, {
+                $inc: { balance: transaction.amount }
+              });
+              res.status(404).send({ success: false, message: 'Database Error: Failed to update receiver balance' });
+            }
+          } else {
+            res.status(404).send({ success: false, message: 'Database Error: Failed to update sender balance' });
+          }
+        }
+      } else {
+        return res.status(404).json({ success: false, message: 'Sender or agent not found' });
+      }
+    });
+
+    app.post('/cash-in', verifyToken, async (req, res) => {
+      const cashInReq = req.body;
+      const sender = await UsersCollection.findOne({'$or':[{email: cashInReq.sender}, {number: cashInReq.sender}]});
+      const agent = await UsersCollection.findOne({'$or':[{email: cashInReq.receiver}, {number: cashInReq.receiver}]});
+      
+      if (sender && agent) {
+        const response = await CashInRequests.insertOne(cashInReq);
+        if (response.acknowledged) {
+          res.status(200).send({ success: true, message: 'Cash In request saved successfully' });
+        } else {
+          res.status(500).send({ success: false, message: 'Failed to save Cash In request' });
+        }
+      } else {
+        res.status(404).json({ success: false, message: 'Sender or agent not found' });
+      }
+    });
+
+    app.get('/user/transactions/:number/:total?', async (req, res) => {
+      const { number, total } = req.params;
+      
+      try {
+        const limit = total ? parseInt(total, 10) : null;
+
+        const transactions = await Transaction.find({'$or':[{sender: number}, {receiver: number}]})
+          .sort({ date: -1 })
+          .limit(limit)
+          .toArray();
+    
+        res.status(200).json(transactions);
+      } catch (error) {
+        res.status(500).json({
+          success: false,
+          message: 'Error fetching transactions'
+        });
+      }
+    })
+
+    app.get('/cash-in-requests/:number/:email', verifyToken, async (req, res) => {
+      const number = req.params.number;
+      const email = req.params.email;
+      const requests = await CashInRequests.find({'$or':[{receiver: number},{receiver:email}]}).toArray();
+      res.send(requests);
+    });
+  
+    app.post('/cash-in-requests/approve', verifyToken, async (req, res) => {
+      const { id } = req.body;
+      console.log(id)
+      const request = await CashInRequests.findOne({ _id: new ObjectId(id) });
+      console.log(request)
+      if (!request) {
+          return res.status(404).send({ success: false, message: 'Request not found' });
+      }
+  
+      const sender = await UsersCollection.findOne({ number: request.sender });
+  
+      if (!sender) {
+          return res.status(404).send({ success: false, message: 'Receiver not found' });
+      }
+  
+      const updateReceiver = await UsersCollection.updateOne({'$or':[{number: request.receiver},{email:request.receiver}]}, { $inc: { balance: -request.amount } });
+      const updateSender = await UsersCollection.updateOne({ number: request.sender }, { $inc: { balance: request.amount } });
+  
+      if (updateReceiver.acknowledged && updateSender.acknowledged) {
+          await CashInRequests.deleteOne({ _id: new ObjectId(id) });
+          await Transaction.insertOne({
+              type: 'Cash In',
+              sender: request.sender,
+              senderName: request.senderName,
+              receiver: request.receiver,
+              amount: request.amount,
+              date: new Date().toISOString(),
+              fee: 0
+          });
+  
+          res.status(200).send({ success: true, message: 'Cash In Request approved and completed' });
+      } else {
+          res.status(500).send({ success: false, message: 'Failed to approve Cash In Request' });
+      }
+  });
+
+  app.delete(`/cash-in-requests/decline/:requestId`, verifyToken, async (req, res) => {
+    const requestId = req.params.requestId
+    const request = await CashInRequests.findOne({ _id: new ObjectId(requestId) });
+
+    if (!request) {
+        return res.status(404).send({ success: false, message: 'Request not found' });
+    }
+
+    await CashInRequests.deleteOne({ _id: new ObjectId(requestId) });
+
+    res.status(201).send({ success: true, message: 'Cash In Request declined and deleted' });
+  })
+  
+
 
 
   } catch (error) {
