@@ -54,6 +54,7 @@ async function run() {
     const UsersCollection = database.collection("users"); 
     const Transaction = database.collection("transaction");
     const CashInRequests = database.collection("cashInRequests")
+    const TopUpRequests = database.collection("topUpRequests")
 
     app.post('/users', async (req, res)=>{
       const user = req.body
@@ -136,7 +137,7 @@ async function run() {
       const transaction = req.body
       transaction.type = "Send Money"
       const sender = await UsersCollection.findOne({'$or':[{email:transaction.sender} , {number:transaction.sender}]})
-      const receiver = await UsersCollection.findOne({'$or':[{email:transaction.receiver} , {number:transaction.receiver}]})
+      const receiver = await UsersCollection.findOne({'$or':[{email:transaction.receiver} , {number:transaction.receiver}]}) 
       
       if(sender && receiver){
         const validPin = await bcrypt.compare(transaction.pin, sender.pin);
@@ -187,9 +188,9 @@ async function run() {
         if (!validPin) {
           return res.status(404).json({ success: false, message: 'Invalid pin' });
         } else {
-          const response = await UsersCollection.updateOne({number:sender.number}, {$inc:{balance:-transaction.amount}});
+          const response = await UsersCollection.updateOne({number:sender.number}, {$inc:{balance:-(transaction.amount+transaction.fee)}});
           if (response.acknowledged) {
-            const response = await UsersCollection.updateOne({number:agent.number}, {$inc:{balance:transaction.amount}});
+            const response = await UsersCollection.updateOne({number:agent.number}, {$inc:{balance:(transaction.amount+transaction.fee)}});
             if (response.acknowledged) {
               delete transaction.pin;
               const response = await Transaction.insertOne(transaction);
@@ -197,9 +198,9 @@ async function run() {
                 res.status(200).send({ success: true, message: 'Transaction successful' });
               } else {
                 const rollback = await UsersCollection.updateOne({number:sender.number}, {
-                  $inc: { balance: transaction.amount }});
+                  $inc: { balance: (transaction.amount+transaction.fee) }});
                 const rollback2 = await UsersCollection.updateOne({number:agent.number}, {
-                  $inc: { balance: -transaction.amount }})
+                  $inc: { balance: -(transaction.amount+transaction.fee) }})
                 res.status(404).send({ success: false, message: 'Database Error: Failed to update receiver balance' });
               }
             } else {
@@ -308,6 +309,94 @@ async function run() {
     await CashInRequests.deleteOne({ _id: new ObjectId(requestId) });
 
     res.status(201).send({ success: true, message: 'Cash In Request declined and deleted' });
+  });
+
+
+  app.get('/user/alltransactions/:email/:number', async (req, res) => {
+    const { email, number } = req.params;
+  
+    try {
+      const transactions = await Transaction.find({
+        $or: [
+          { sender: email },
+          { sender: number },
+          { receiver: email },
+          { receiver: number },
+        ],
+      }).sort({ date: -1 }).toArray();
+  
+      if (transactions.length === 0) {
+        return res.json([]);
+      }
+  
+      res.json(transactions);
+    } catch (error) {
+      res.status(500).json({ message: 'Server error', error });
+    }
+  });
+  
+
+  app.post('/top-up', verifyToken, async (req, res) => {
+    const topUpReq = req.body;
+    const agent = await UsersCollection.findOne({ number: topUpReq.sender });
+    
+    if (agent) {
+      const validPin = await bcrypt.compare(topUpReq.pin, agent.pin);
+      if (!validPin) {
+        return res.status(404).json({ success: false, message: 'Invalid pin' });
+      } else {
+        const response = await TopUpRequests.insertOne(topUpReq);
+        if (response.acknowledged) {
+          res.status(200).send({ success: true, message: 'Top Up Request successful' });
+        } else {
+          res.status(404).send({ success: false, message: 'Database Error: Failed to create Top Up request' });
+        }
+      }
+    } else {
+      res.status(404).send({ success: false, message: 'Agent not found' });
+    }
+  });
+
+
+  app.post("/withdraw", verifyToken, async(req,res)=>{
+    const transaction = req.body
+    transaction.type = "Withdraw"
+    const agent = await UsersCollection.findOne({'$or':[{email:transaction.sender} , {number:transaction.sender}]})
+    const admin = await UsersCollection.findOne({'$or':[{email:transaction.receiver} , {number:transaction.receiver}]})
+
+    if(agent && admin){
+      const validPin = await bcrypt.compare(transaction.pin, agent.pin);
+      if(!validPin){
+        return res.status(404).json({ success: false, message: 'Invalid pin' });
+      }
+      else{
+          const response = await UsersCollection.updateOne({number:agent.number}, {$inc:{balance:-(transaction.amount+transaction.fee)}});
+          if(response.acknowledged){
+            const response = await UsersCollection.updateOne({number:admin.number}, {$inc:{balance:(transaction.amount+transaction.fee)}});
+            if(response.acknowledged){
+              delete transaction.pin;
+              const response = await Transaction.insertOne(transaction);
+              if(response.acknowledged){
+                res.status(200).send({success: true, message: "Transaction successful"})
+              }
+              else{
+                const rollback = await UsersCollection.updateOne({number:agent.number}, {
+                  $inc:{balance: transaction.amount}
+                })
+                res.status(404).send({success: false, message: "Database Error: Failed to update receiver balance"})
+              }
+            }
+            else{
+              const rollback = await UsersCollection.updateOne({number:agent.number}, {
+                $inc:{balance: transaction.amount}
+              })
+              res.status(404).send({success: false, message: "Database Error: Failed to update receiver balance"})
+            }
+          }else{
+            res.status(404).send({success: false, message: "Database Error: Failed to update sender balance"})
+          }
+      }
+    }
   })
   
 
