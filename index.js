@@ -150,7 +150,7 @@ async function run() {
               const response = await UsersCollection.updateOne({number:receiver.number}, {$inc:{balance: transaction.amount}})
               if(response.acknowledged){
                 if(transaction.amount >= 100){
-                  await UsersCollection.updateOne({number:admin.number},{$inc:{balance: 5}})
+                  await UsersCollection.updateOne({email:"admin@cashtaka.com"},{$inc:{balance: 5}})
                 }
                 delete transaction.pin;
                 const response = await Transaction.insertOne(transaction)
