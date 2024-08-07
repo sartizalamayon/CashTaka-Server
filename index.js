@@ -438,15 +438,52 @@ async function run() {
 
   app.delete(`/topup-requests/decline/:requestId`, verifyToken, async (req, res) => {
     const requestId = req.params.requestId;
-    const request = await TopupRequests.findOne({ _id: new ObjectId(requestId) });
+    const request = await TopUpRequests.findOne({ _id: new ObjectId(requestId) });
 
     if (!request) {
         return res.status(404).send({ success: false, message: 'Request not found' });
     }
 
-    await TopupRequests.deleteOne({ _id: new ObjectId(requestId) });
+    await TopUpRequests.deleteOne({ _id: new ObjectId(requestId) });
 
     res.status(201).send({ success: true, message: 'Topup Request declined and deleted' });
+  });
+
+  app.post('/topup-requests/approve', verifyToken, async (req, res) => {
+    const { id } = req.body;
+    const request = await TopUpRequests.findOne({ _id: new ObjectId(id) });
+    if (!request) {
+        return res.status(404).send({ success: false, message: 'Request not found' });
+    }
+
+    const sender = await UsersCollection.findOne({ number: request.sender });
+
+    if (!sender) {
+        return res.status(404).send({ success: false, message: 'Sender not found' });
+    }
+
+    const updateSender = await UsersCollection.updateOne({ number: request.sender }, { $inc: { balance: request.amount } });
+
+    if (updateSender.acknowledged) {
+      const updateAdmin = await UsersCollection.updateOne({email: 'admin@cashtaka.com'}, {$inc: { balance: -request.amount }})
+      if(updateAdmin.acknowledged){
+
+        await TopUpRequests.deleteOne({ _id: new ObjectId(id) });
+        await Transaction.insertOne({
+            type: 'Topup',
+            sender: "admin@cashtaka.com",
+            senderName: "Admin",
+            receiver: request.sender,
+            amount: request.amount,
+            date: new Date().toISOString(),
+            fee: 0
+        });
+
+        res.status(200).send({ success: true, message: 'Topup Request approved and completed' });
+      }
+    } else {
+        res.status(500).send({ success: false, message: 'Failed to approve Topup Request' });
+    }
   });
 
 
