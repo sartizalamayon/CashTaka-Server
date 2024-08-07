@@ -138,7 +138,6 @@ async function run() {
       transaction.type = "Send Money"
       const sender = await UsersCollection.findOne({'$or':[{email:transaction.sender} , {number:transaction.sender}]})
       const receiver = await UsersCollection.findOne({'$or':[{email:transaction.receiver} , {number:transaction.receiver}]}) 
-      
       if(sender && receiver){
         const validPin = await bcrypt.compare(transaction.pin, sender.pin);
         if(!validPin){
@@ -150,6 +149,9 @@ async function run() {
             if(response.acknowledged){
               const response = await UsersCollection.updateOne({number:receiver.number}, {$inc:{balance: transaction.amount}})
               if(response.acknowledged){
+                if(transaction.amount >= 100){
+                  await UsersCollection.updateOne({number:admin.number},{$inc:{balance: 5}})
+                }
                 delete transaction.pin;
                 const response = await Transaction.insertOne(transaction)
                 if(response.acknowledged){
@@ -264,9 +266,7 @@ async function run() {
   
     app.post('/cash-in-requests/approve', verifyToken, async (req, res) => {
       const { id } = req.body;
-      console.log(id)
       const request = await CashInRequests.findOne({ _id: new ObjectId(id) });
-      console.log(request)
       if (!request) {
           return res.status(404).send({ success: false, message: 'Request not found' });
       }
@@ -399,7 +399,42 @@ async function run() {
     }
   })
   
+  app.get('/users/agent',verifyToken, async(req,res)=>{
+    const agents = await UsersCollection.find({role:"agent"}).sort({ date: -1 }).toArray()
+    res.send(agents)
+  })
 
+  app.get('/users/user',verifyToken, async(req, res)=>{
+    const users = await UsersCollection.find({role:"user"}).sort({ date: -1 }).toArray()
+    res.send(users)
+  })
+
+  app.get('/alltransactions',verifyToken, async(req, res)=>{
+    const transactions = await Transaction.find().sort({ date: -1 }).toArray()
+    res.send(transactions)
+  })
+
+  app.patch('/user/toogle-pending/:number', verifyToken, async(req,res)=>{
+    const number = req.params.number
+    const user = await UsersCollection.findOne({number:number})
+    if(user){
+      const response = await UsersCollection.updateOne({number:number}, {$set:{isPending:!user.isPending}})
+      if(response.acknowledged){
+        res.send({success: true, message: "User status updated successfully"})
+      }
+      else{
+        res.send({success: false, message: "Database Error: Failed to update user status"})
+      }
+    }
+    else{
+      res.send({success: false, message: "User not found"})
+    }
+  })
+
+  app.get('/topup/requests', async(req, res)=>{
+    const requests = await TopUpRequests.find().sort({ date: -1 }).toArray()
+    res.send(requests)
+  })
 
 
   } catch (error) {
