@@ -436,6 +436,20 @@ async function run() {
     res.send(requests)
   })
 
+  app.delete(`/topup-requests/decline/:requestId`, verifyToken, async (req, res) => {
+    const requestId = req.params.requestId;
+    const request = await TopupRequests.findOne({ _id: new ObjectId(requestId) });
+
+    if (!request) {
+        return res.status(404).send({ success: false, message: 'Request not found' });
+    }
+
+    await TopupRequests.deleteOne({ _id: new ObjectId(requestId) });
+
+    res.status(201).send({ success: true, message: 'Topup Request declined and deleted' });
+  });
+
+
 
   } catch (error) {
     console.error("Failed to connect to MongoDB:", error);
