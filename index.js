@@ -9,7 +9,7 @@ const port = process.env.PORT || 3001;
 
 app.use(
   cors({
-    origin: ["http://localhost:5174", "http://localhost:5173"],
+    origin: ["https://66b3fbc0de61d544b771c807--euphonious-bienenstitch-8172dd.netlify.app/"],
     credentials: true,
   })
 );
@@ -47,7 +47,7 @@ const verifyToken = (req, res, next) => {
 
 async function run() {
   try {
-    await client.connect();
+    //await client.connect();
 
     // Models
     const database = client.db("CashTaka");
