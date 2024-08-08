@@ -9,7 +9,7 @@ const port = process.env.PORT || 3001;
 
 app.use(
   cors({
-    origin: ["https://66b3fbc0de61d544b771c807--euphonious-bienenstitch-8172dd.netlify.app"],
+    origin: ["https://66b3fbc0de61d544b771c807--euphonious-bienenstitch-8172dd.netlify.app", "http://localhost:5174", "http://localhost:5173"],
     credentials: true,
   })
 );
